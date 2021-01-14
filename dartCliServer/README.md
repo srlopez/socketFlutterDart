@@ -22,7 +22,3 @@ En el cliente se puede introducir un mensaje por la consola
 
 mshsdvsd@alias;pepe manda el mensaje a los alias exclusivamente. Pudene ser varios separados por ;
 
-Otras pruebas
-- iso.dart - Pruebas de isolates
-- scoketio_* - Pruebas con socketsio
-- stream - Pruebas para leer la entrada de teclado (usada en socket_cliente2)
