@@ -25,8 +25,8 @@ example:
 
 The messages that are received are shown, and you can also send a message by typing in the console. Examples of messages can be:  
 - `A normal text`  
-- `a text addressed to someone @ Jhon`  
-- `messages @ Jhon; Martin`  
+- `a text addressed to someone@Jhon`  
+- `messages@Jhon; Martin`  
 
 
 ## flutterCli/main.dart
