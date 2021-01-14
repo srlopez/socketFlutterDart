@@ -1,0 +1,6 @@
+name: test
+
+dependencies:
+  socket_io: ^0.9.4
+  socket_io_client: ^0.9.11
+
