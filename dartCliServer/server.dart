@@ -68,13 +68,12 @@ void handleClient(Socket client) {
 
   // Nueva conexión/LOGIN establecida
   void newConnetion(Socket client, String name) {
-    printServer(
-        '${client.hashCode} client.address.port: ${client.remoteAddress.address}:${client.remotePort}:$name');
-
     db.add(client, name);
+    printServer(
+        'Connected ${db.alias(db.id(client))} on address.port: ${client.remoteAddress.address}:${client.remotePort}');
 
     sendMsg(client, 'CLIENT_COUNTER', db.length,
-        {'from': name, 'clients': db.toString()});
+        {'from': db.alias(db.id(client)), 'clients': db.toString()});
 
     sendMsgToAll(db.id(client), 'CLIENT_COUNTER', db.length,
         {'from': 'Server', 'clients': db.toString()});
