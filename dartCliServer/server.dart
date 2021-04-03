@@ -4,11 +4,7 @@ import 'dart:convert' show utf8, jsonDecode, jsonEncode;
 InternetAddress HOST = InternetAddress.loopbackIPv4;
 const PORT = 7654;
 
-// Lista de clientes conectados hash-socket
-var connections = Map<int, Socket>();
-// Lista de login conetados: hash-alias
-// Esta aprosimación no permite el mismo alias para distintos clientes
-var alias = Map<int, String>();
+var db = ClientesDB();
 
 // Muesta la lista de interfces y las Ip asignadas
 // Si se pasa una interface estable la variable HOST con la ip de la interface
@@ -29,6 +25,7 @@ void main(List<String> argv) async {
   setIp();
   // Establece la IP por la que escucha
   if (argv.length > 0) await setIp(argv[0].toLowerCase());
+
   // Y se pone a escuchar. Por cada conexion/bin lanza un lambda para cada cliente
   ServerSocket.bind(HOST, PORT).then((ServerSocket srv) {
     printServer('server on ${HOST.address}:${PORT}');
@@ -59,35 +56,36 @@ void handleClient(Socket client) {
   }
 
   // broadcast a todos
-  void sendMsgToAll(int hashOrigen, String action, dynamic value,
+  void sendMsgToAll(int from, String action, dynamic value,
       [Map data = const {}]) {
     var msg = Map();
     msg.addAll(data);
-    msg['from'] = alias[hashOrigen];
-    connections.forEach((hashCode, client) {
-      if (hashOrigen != client.hashCode) sendMsg(client, action, value, msg);
+    msg['from'] = db.alias(from);
+    db.items.forEach((id, client) {
+      if (from != id) sendMsg(client.socket, action, value, msg);
     });
   }
 
   // Nueva conexión/LOGIN establecida
   void newConnetion(Socket client, String name) {
-    connections[client.hashCode] = client;
-    alias[client.hashCode] = name;
-    sendMsg(client, 'CLIENT_COUNTER', connections.length,
-        {'from': name, 'clients': alias.values.toList()});
-    sendMsgToAll(client.hashCode, 'CLIENT_COUNTER', connections.length,
-        {'from': 'Server', 'clients': alias.values.toList()});
+    printServer(
+        '${client.hashCode} client.address.port: ${client.remoteAddress.address}:${client.remotePort}:$name');
+
+    db.add(client, name);
+
+    sendMsg(client, 'CLIENT_COUNTER', db.length,
+        {'from': name, 'clients': db.toString()});
+
+    sendMsgToAll(db.id(client), 'CLIENT_COUNTER', db.length,
+        {'from': 'Server', 'clients': db.toString()});
   }
 
   // onDone/Cloe/Quit
   void removeConnetion(Socket client) {
-    alias.remove(client.hashCode);
-    connections.remove(client.hashCode);
-    printServer('${connections.length} clients');
-    sendMsgToAll(client.hashCode, 'CLIENT_COUNTER', connections.length,
-        {'from': 'Server'});
-    client.close();
-    client.destroy();
+    sendMsgToAll(
+        db.id(client), 'CLIENT_COUNTER', db.length, {'from': 'Server'});
+    db.delete(client);
+    printServer('${db.length} clients');
   }
 
   // onError!!
@@ -103,7 +101,7 @@ void handleClient(Socket client) {
 
   // Por cada mensaje
   void onData(String json) {
-    print('${client.hashCode} $json');
+    //print('${client.hashCode} $json');
     try {
       Map msg = jsonDecode(json);
 
@@ -116,21 +114,23 @@ void handleClient(Socket client) {
           break;
         case 'MSG':
           {
-            var toClient = msg['to'].toString().toLowerCase();
             var value = msg['value'].toString().toLowerCase();
             if (value == "") return; //Evitamos el mensaje void
-            if (toClient == 'all')
-              sendMsgToAll(client.hashCode, '', '', msg);
-            else {
-              toClient.split(';').forEach((to) {
-                MapEntry<int, String> entry = alias.entries.firstWhere(
-                    (element) => element.value == to,
-                    orElse: () => MapEntry(0, 'not found'));
-                if (entry.key != 0) {
-                  msg['to'] = to;
-                  msg['from'] = alias[client.hashCode];
-                  sendMsg(connections[entry.key]!, '', '', msg);
-                }
+
+            var toClient = msg['to'].toString().toLowerCase();
+            if (toClient == 'all') {
+              sendMsgToAll(db.id(client), '', '', msg);
+            } else {
+              //Por cada destinatario
+              toClient.split(';').forEach((toString) {
+                try {
+                  var to = int.parse(toString);
+                  if (db.find(to)) {
+                    msg['to'] = db.alias(to);
+                    msg['from'] = db.alias(db.id(client));
+                    sendMsg(db.socket(to), '', '', msg);
+                  }
+                } catch (e) {}
               });
             }
           }
@@ -145,12 +145,71 @@ void handleClient(Socket client) {
   }
 
   // mostramos la conexion entrante
-  printServer(
-      '${client.hashCode} connected from ${client.remoteAddress.address}:${client.remotePort}');
+  // printServer(
+  //     '${client.hashCode} connected from ${client.remoteAddress.address}:${client.remotePort}');
 
   // Establecemos el Ciclo de lectura de mensajes con los lambdas aquí definidos.
   client
       .cast<List<int>>()
       .transform(utf8.decoder)
       .listen(onData, onError: onError, onDone: onDone);
+}
+
+class Client<Socket, String> {
+  final Socket client;
+  final String nombre;
+
+  Client(this.client, this.nombre);
+
+  Socket get socket => client;
+}
+
+class ClientesDB {
+  // hash -> (socket,nombre)
+  var _memory = Map<int, Client<Socket, String>>();
+
+  int _hash(Socket client) {
+    return '${client.remoteAddress.address}:${client.remotePort}'.hashCode;
+  }
+
+  int id(Socket client) {
+    return _hash(client);
+  }
+
+  void add(Socket client, String name) {
+    int id = _hash(client);
+    _memory[id] = Client(client, name);
+  }
+
+  // onDone/Close/Quit
+  void delete(Socket client) {
+    int id = _hash(client);
+    _memory.remove(id);
+    client.close();
+    client.destroy();
+  }
+
+  String alias(int id) {
+    var c = _memory[id];
+    return '$id:${c!.nombre}';
+  }
+
+  bool find(int id) {
+    return _memory.containsKey(id);
+  }
+
+  Socket socket(int id) {
+    return _memory[id]!.socket;
+  }
+
+  String toString() {
+    var result = _memory.entries
+        .map<String>((e) => alias(e.key))
+        .reduce((a, b) => '$a, $b');
+    return '[ $result ]';
+  }
+
+  int get length => _memory.length;
+
+  Map<int, Client<Socket, String>> get items => _memory;
 }

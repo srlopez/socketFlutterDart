@@ -23,6 +23,8 @@ void main(List<String> argv) {
   Socket.connect(HOST, PORT).then((socket) async {
     print('connected to ${HOST.address}:$PORT');
 
+    print('socket.address.port: ${socket.address.address}:${socket.port}');
+
     // Nos presentamos al servidor
     sendMsg(socket, 'LOGIN', alias, {
       "localHostname": Platform.localHostname,
