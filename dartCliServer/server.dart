@@ -4,10 +4,13 @@ import 'dart:convert' show utf8, jsonDecode, jsonEncode;
 InternetAddress HOST = InternetAddress.loopbackIPv4;
 const PORT = 7654;
 
-var db = ClientesDB();
+var connections = ConnectionsList();
 
-// Muesta la lista de interfces y las Ip asignadas
-// Si se pasa una interface estable la variable HOST con la ip de la interface
+/*
+ * Muesta la lista de interfces y las Ip asignadas
+ * Si se pasa una interface estable la variable HOST con la ip de la interface
+ * iface = nombre de la interfaz por la que escuchar.
+*/
 Future setIp([String iface = 'none']) async {
   for (var interface in await NetworkInterface.list()) {
     //print('== Interface: ${interface.name} ==');
@@ -26,126 +29,89 @@ void main(List<String> argv) async {
   // Establece la IP por la que escucha
   if (argv.length > 0) await setIp(argv[0].toLowerCase());
 
-  // Y se pone a escuchar. Por cada conexion/bin lanza un lambda para cada cliente
+  // Y se pone a escuchar.
+  // Por cada conexion/bind lanza 'handleClient' para cada cliente
   ServerSocket.bind(HOST, PORT).then((ServerSocket srv) {
-    printServer('server on ${HOST.address}:${PORT}');
+    logInfo('server on ${HOST.address}:${PORT}');
     srv.listen(handleClient);
   }).catchError(print);
 }
 
 // Una tonteria de función
-void printServer(msg) {
+void logInfo(msg) {
+  msg = msg.replaceAll('\n', ' ');
   print('INFO: $msg');
 }
 
 // Ciclo ppal de manejo de conexión cliente
 void handleClient(Socket client) {
-  // envio de msg a un cliente
-  void sendMsg(Socket client, String action, dynamic value,
-      [Map data = const {}]) {
-    var msg = Map();
-    msg["action"] = action;
-    msg["value"] = value.toString();
-    msg.addAll(data);
-
-    try {
-      client.write('${jsonEncode(msg)}\n');
-    } catch (e) {
-      print('try client.write: $e');
-    }
-  }
-
-  // broadcast a todos
-  void sendMsgToAll(int from, String action, dynamic value,
-      [Map data = const {}]) {
-    var msg = Map();
-    msg.addAll(data);
-    msg['from'] = db.alias(from);
-    db.items.forEach((id, client) {
-      if (from != id) sendMsg(client.socket, action, value, msg);
-    });
-  }
-
-  // Nueva conexión/LOGIN establecida
-  void newConnetion(Socket client, String name) {
-    db.add(client, name);
-    printServer(
-        'Connected ${db.alias(db.id(client))} on address.port: ${client.remoteAddress.address}:${client.remotePort}');
-
-    sendMsg(client, 'CLIENT_COUNTER', db.length,
-        {'from': db.alias(db.id(client)), 'clients': db.toString()});
-
-    sendMsgToAll(db.id(client), 'CLIENT_COUNTER', db.length,
-        {'from': 'Server', 'clients': db.toString()});
-  }
-
-  // onDone/Cloe/Quit
-  void removeConnetion(Socket client) {
-    sendMsgToAll(
-        db.id(client), 'CLIENT_COUNTER', db.length, {'from': 'Server'});
-    db.delete(client);
-    printServer('${db.length} clients');
-  }
-
   // onError!!
   void onError(e) {
-    printServer('Error $e');
+    logInfo('Error $e');
   }
 
   // onDone/Close conexxión
   void onDone() {
-    printServer('disconnect from ${client.hashCode}');
-    removeConnetion(client);
+    connections.broadcastMsg(client, 'QUIT', connections.getId(client));
+    connections.remove(client);
+    client.close();
+    client.destroy();
+    logInfo('Count ${connections.count} clients');
   }
 
-  // Por cada mensaje
+  // onData: Por cada mensaje
   void onData(String json) {
-    //print('${client.hashCode} $json');
     try {
       Map msg = jsonDecode(json);
 
-      switch (msg["action"]) {
-        case 'LOGIN':
-          newConnetion(client, msg['value'].toString().toLowerCase());
-          break;
-        case 'QUIT':
-          // No hacemos NADA, el cierre del cliente enviá un onDone y CERRAMOS;
-          break;
-        case 'MSG':
-          {
-            var value = msg['value'].toString().toLowerCase();
-            if (value == "") return; //Evitamos el mensaje void
+      //Evitamos el mensaje void
+      var value = msg['value'] ?? "";
+      if (value == "") return;
 
-            var toClient = msg['to'].toString().toLowerCase();
-            if (toClient == 'all') {
-              sendMsgToAll(db.id(client), '', '', msg);
-            } else {
-              //Por cada destinatario
-              toClient.split(';').forEach((toString) {
-                try {
-                  var to = int.parse(toString);
-                  if (db.find(to)) {
-                    msg['to'] = db.alias(to);
-                    msg['from'] = db.alias(db.id(client));
-                    sendMsg(db.socket(to), '', '', msg);
-                  }
-                } catch (e) {}
-              });
-            }
-          }
+      logInfo('$json <= ${connections.getId(client)}');
+
+      switch (msg["action"]) {
+        case 'ALIAS':
+          connections.setAlias(client, value);
+          connections.broadcastMsg(
+              client, 'ALIAS', connections.getAlias(client));
+          connections.sendMsg(client, client, 'USERS', connections.toString());
+          break;
+        case 'LATLNG':
+          connections.setLocation(client, value);
+          connections.broadcastLocation(client, msg);
           break;
         default:
-          sendMsg(client, 'ERROR', msg);
-          break;
+          //Evitamos el mensaje de quien no se identifica
+          if (connections.getAlias(client) == '') break;
+
+          if (msg.containsKey('to')) {
+            var to = msg['to'].toString();
+            msg.remove('to');
+            //Por cada destinatario
+            to.split(';').forEach((id) {
+              try {
+                var socket = connections.getSocket(int.parse(id));
+                connections.sendMsg(client, socket, '', '', msg);
+              } catch (e) {
+                //Bad state: No element
+                //FormatException: Invalid radix-10 number
+              }
+            });
+          } else
+            connections.broadcastMsg(client, '', '', msg);
       }
     } catch (e) {
       print(e);
     }
   }
 
-  // mostramos la conexion entrante
-  // printServer(
-  //     '${client.hashCode} connected from ${client.remoteAddress.address}:${client.remotePort}');
+  //
+  logInfo(
+      'Connected from ${client.remoteAddress.address}:${client.remotePort}');
+  // Enviamos la ID
+  connections.add(client);
+  connections.sendMsg(client, client, 'ID', connections.getId(client));
 
   // Establecemos el Ciclo de lectura de mensajes con los lambdas aquí definidos.
   client
@@ -154,61 +120,93 @@ void handleClient(Socket client) {
       .listen(onData, onError: onError, onDone: onDone);
 }
 
-class Client<Socket, String> {
-  final Socket client;
-  final String nombre;
+class Client {
+  final int id;
+  String alias = '';
+  String latlng = '';
 
-  Client(this.client, this.nombre);
+  Client(socket)
+      : id = '${socket.remoteAddress.address}:${socket!.remotePort}'.hashCode;
 
-  Socket get socket => client;
+  @override
+  String toString() => jsonEncode({'id': id, 'alias': alias});
 }
 
-class ClientesDB {
-  // hash -> (socket,nombre)
-  var _memory = Map<int, Client<Socket, String>>();
+class ConnectionsList {
+  var _items = Map<Socket, Client>();
+  int get count => _items.length;
 
-  int _hash(Socket client) {
-    return '${client.remoteAddress.address}:${client.remotePort}'.hashCode;
+  String add(Socket socket) {
+    Client client = Client(socket);
+    _items[socket] = client;
+    return client.toString();
   }
 
-  int id(Socket client) {
-    return _hash(client);
+  void remove(Socket socket) {
+    _items.remove(socket);
   }
 
-  void add(Socket client, String name) {
-    int id = _hash(client);
-    _memory[id] = Client(client, name);
+  Socket getSocket(int id) {
+    var entry = _items.entries.firstWhere((element) => element.value.id == id);
+    return entry.key;
   }
 
-  // onDone/Close/Quit
-  void delete(Socket client) {
-    int id = _hash(client);
-    _memory.remove(id);
-    client.close();
-    client.destroy();
+  int getId(Socket socket) {
+    return _items[socket]!.id;
   }
 
-  String alias(int id) {
-    var c = _memory[id];
-    return '$id:${c!.nombre}';
+  String getAlias(Socket socket) {
+    return _items[socket]!.alias;
   }
 
-  bool find(int id) {
-    return _memory.containsKey(id);
+  void setAlias(Socket socket, String alias) {
+    _items[socket]!.alias = alias;
   }
 
-  Socket socket(int id) {
-    return _memory[id]!.socket;
+  void setLocation(Socket socket, String location) {
+    _items[socket]!.latlng = location;
   }
 
+  @override
   String toString() {
-    var result = _memory.entries
-        .map<String>((e) => alias(e.key))
+    var result = _items.entries
+        .map<String>((e) => e.value.toString())
         .reduce((a, b) => '$a, $b');
     return '[ $result ]';
   }
 
-  int get length => _memory.length;
+  void sendMsg(Socket from, Socket to, String action, dynamic value,
+      [Map data = const {}]) {
+    var msg = Map();
+    msg['action'] = action;
+    msg['value'] = value.toString();
+    msg['from'] = getId(from);
+    msg['on'] = DateTime.now().toLocal().toString().substring(0, 19);
+    msg.addAll(data);
 
-  Map<int, Client<Socket, String>> get items => _memory;
+    try {
+      to.write('${jsonEncode(msg)}\n');
+    } catch (e) {
+      print('sendMsg: $e');
+    }
+  }
+
+  void broadcastMsg(Socket from, String action, dynamic value,
+      [Map data = const {}]) {
+    var msg = Map();
+    msg.addAll(data);
+    _items.forEach((to, client) {
+      // No nos reenviamos el msg
+      if (from != to) sendMsg(from, to, action, value, msg);
+    });
+  }
+
+  void broadcastLocation(Socket from, Map data) {
+    var msg = Map();
+    msg.addAll(data);
+    _items.forEach((to, client) {
+      // No se envia locacizaciones a quien comparte la suya.
+      if ((from != to) && (client.latlng != '')) sendMsg(from, to, '', '', msg);
+    });
+  }
 }

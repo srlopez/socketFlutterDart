@@ -6,7 +6,7 @@ InternetAddress HOST = InternetAddress.loopbackIPv4;
 const PORT = 7654;
 void main(List<String> argv) {
   //Parámetros 'alias de cliente/dummy' 'Server IP/127.0.0.1'
-  var alias = argv.length > 0 ? argv[0] : 'dummy';
+  var alias = argv.length > 0 ? argv[0] : Platform.localHostname;
   if (argv.length > 1) HOST = InternetAddress(argv[1]);
 
   // envio de un mensaje convertido en Json
@@ -21,20 +21,16 @@ void main(List<String> argv) {
 
   // Nos conectamos al servidor
   Socket.connect(HOST, PORT).then((socket) async {
-    print('connected to ${HOST.address}:$PORT');
+    print('Connected to ${HOST.address}:$PORT');
 
-    print('socket.address.port: ${socket.address.address}:${socket.port}');
+    print('Socket.Address.Port: ${socket.address.address}:${socket.port}');
 
     // Nos presentamos al servidor
-    sendMsg(socket, 'LOGIN', alias, {
-      "localHostname": Platform.localHostname,
-      "operatingSystem": Platform.operatingSystem,
-      "operatingSystemVersion": Platform.operatingSystemVersion
-    });
+    sendMsg(socket, 'ALIAS', alias);
 
     // Establecemos los listeners onData, onDone, onError
     socket.cast<List<int>>().transform(utf8.decoder).listen(onData, onDone: () {
-      print("onDone: Cerrado el servidor");
+      print("onDone: Servidor cerrado");
       socket.close();
       exit(0);
     }, onError: (error) {
@@ -59,10 +55,17 @@ void main(List<String> argv) {
   });
 }
 
-onData(json) {
-  //Recibimos un msg
-  var data = jsonDecode(json);
-  print('onData: $data');
+onData(data) {
+  LineSplitter ls = new LineSplitter();
+  List<String> lines = ls.convert(data);
+  lines.forEach((line) {
+    var json = jsonDecode(line);
+    print('onData: $json');
+    // if (json['action'] == 'CLIENTS') {
+    //   var value = jsonDecode(json['value']);
+    //   print(value[0]);
+    // }
+  });
 }
 
 // Lectura de teclado de LineSplitter
@@ -80,12 +83,18 @@ getStdinData(Socket socket, Function sendMsg) async {
     if (msg.toString().toLowerCase() == 'quit')
       return (0); //<- si 'quit' acabamos
 
+    var action = 'MSG';
+    if (msg.indexOf(':') > -1) {
+      action = msg.split(':')[0].toUpperCase();
+      msg = msg.split(':')[1];
+    }
+
     if (msg.indexOf('@') > -1) {
       var value = msg.split('@')[0];
       var to = msg.split('@')[1]; //uno;dos;tres;cuatro
-      sendMsg(socket, 'MSG', value, {'to': to});
+      sendMsg(socket, action, value, {'to': to});
     } else
-      sendMsg(socket, 'MSG', msg, {'to': 'ALL'});
+      sendMsg(socket, action, msg);
 
     //stdout.write("Mensaje: ");
   }

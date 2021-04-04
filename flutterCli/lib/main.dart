@@ -35,16 +35,19 @@ class SocketClient extends StatefulWidget {
 class SocketClientState extends State<SocketClient> {
   final scaffoldKey = GlobalKey<ScaffoldState>();
 
-  String localIP = "";
-  int port = 7654;
-  List<MessageItem> items = List<MessageItem>();
+  List<MessageItem> items = [];
+  var users = <int, String>{0: "SYSTEM"};
 
-  TextEditingController ipCon = TextEditingController();
+  String localIP;
+  int port = 7654;
+  var alias = 'soymovil';
+  int meId = 0;
+
+  TextEditingController ipCon = TextEditingController(text: "10.0.2.2");
   TextEditingController msgCon = TextEditingController();
+  var logincontroller = TextEditingController(text: 'SoyMovil');
 
   Socket socket;
-  var alias = 'soymovil';
-  var logincontroller = TextEditingController(text: 'soymovil');
 
   @override
   void initState() {
@@ -89,7 +92,7 @@ class SocketClientState extends State<SocketClient> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Login:', style: TextStyle(fontWeight: FontWeight.bold)),
+          Text('Alias:', style: TextStyle(fontWeight: FontWeight.bold)),
           TextField(
             controller: logincontroller,
           ),
@@ -120,7 +123,7 @@ class SocketClientState extends State<SocketClient> {
               filled: true,
               fillColor: Colors.grey[50]),
         ),
-        trailing: RaisedButton(
+        trailing: ElevatedButton(
           child: Text((socket != null) ? "Disconnect" : "Connect"),
           onPressed: (socket != null) ? disconnectFromServer : connectToServer,
         ),
@@ -135,8 +138,9 @@ class SocketClientState extends State<SocketClient> {
           itemCount: items.length,
           itemBuilder: (context, index) {
             MessageItem item = items[index];
+
             return Container(
-              alignment: (item.owner == 'yo')
+              alignment: (item.owner == meId)
                   ? Alignment.centerRight
                   : Alignment.centerLeft,
               child: Container(
@@ -145,14 +149,18 @@ class SocketClientState extends State<SocketClient> {
                     const EdgeInsets.symmetric(vertical: 10, horizontal: 10),
                 decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(10),
-                    color: (item.owner == 'yo')
-                        ? Colors.lightGreen
-                        : Colors.grey[400]),
+                    color: (item.type != 'MSG')
+                        ? Colors.lightBlueAccent[400]
+                        : (item.owner == meId)
+                            ? Colors.lightGreen[600]
+                            : Colors.grey[600]),
                 child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                  crossAxisAlignment: (item.owner == meId)
+                      ? CrossAxisAlignment.end
+                      : CrossAxisAlignment.start,
                   children: <Widget>[
                     Text(
-                      (item.owner == 'yo') ? alias : item.owner,
+                      '${item.type}: ${users[item.owner]}',
                       style: TextStyle(
                           fontWeight: FontWeight.bold, color: Colors.white70),
                     ),
@@ -211,12 +219,13 @@ class SocketClientState extends State<SocketClient> {
       setState(() {
         socket = misocket;
       });
-      print(
-          "connected to ${socket.remoteAddress.address}:${socket.remotePort}");
-      // Nos presentamos al servidor
-      sendMsg('LOGIN', alias);
+
       showSnackBarWithKey(
           "connected to ${socket.remoteAddress.address}:${socket.remotePort}");
+
+      // Nos presentamos al servidor
+      sendMsg('ALIAS', alias);
+
       socket.listen(
         (data) => onData(utf8.decode(data)),
         //(data) => onData(String.fromCharCodes(data).trim()),
@@ -229,34 +238,42 @@ class SocketClientState extends State<SocketClient> {
     });
   }
 
-  void onData(json) {
-    var data = jsonDecode(json);
-    print('onData: $data');
+  void onData(data) {
+    LineSplitter ls = new LineSplitter();
+    List<String> lines = ls.convert(data);
+    lines.forEach(onLine);
+  }
+
+  void onLine(line) {
+    print('onData: $line');
     setState(() {
-      Map msg = jsonDecode(json);
+      Map msg = jsonDecode(line);
 
       switch (msg["action"]) {
-        case 'CLIENT_COUNTER':
-          setState(() {
-            items.insert(
-                0,
-                MessageItem(
-                  'INFO',
-                  'conectados ${data["value"]} clientes\n${data["clients"]}',
-                ));
-          });
-
+        case 'ID':
+          meId = int.parse(msg["value"]);
           break;
-        case 'MSG':
-          setState(() {
-            items.insert(0, MessageItem(data['from'], data['value']));
-          });
-
+        case 'USERS':
+          items.insert(
+              0,
+              MessageItem(
+                0,
+                'USERS',
+                msg["value"],
+              ));
+          var list = jsonDecode(msg["value"]);
+          list.forEach((u) => users[u['id']] = u['alias']);
+          break;
+        case 'ALIAS':
+          users[msg['from']] = msg['value'];
+          break;
+        case 'QUIT':
+          users.remove(msg['from']);
           break;
         default:
-          {
-            print('No reconocido: $data');
-          }
+          items.insert(
+              0, MessageItem(msg['from'], msg['action'], msg['value']));
+
           break;
       }
     });
@@ -274,6 +291,7 @@ class SocketClientState extends State<SocketClient> {
   }
 
   void disconnectFromServer() {
+    meId = 0;
     sendMsg('QUIT', '');
     print("disconnectFromServer");
 
@@ -309,32 +327,43 @@ class SocketClientState extends State<SocketClient> {
     var msg = msgCon.text;
     msgCon.clear();
 
-    setState(() {
-      items.insert(0, MessageItem('yo', msg));
-    });
+    var action = 'MSG';
+    if (msg.indexOf(':') > -1) {
+      action = msg.split(':')[0].toUpperCase();
+      msg = msg.split(':')[1];
+    }
 
-    if (msg.indexOf('@') > -1)
-      sendMsg('MSG', msg.split('@')[0], {'to': msg.split('@')[1]});
-    else
-      sendMsg('MSG', msg, {'to': 'ALL'});
+    if (msg.indexOf('@') > -1) {
+      var data = msg.split('@')[0];
+      var to = msg.split('@')[1]; //uno;dos;tres;cuatro
+      sendMsg(action, data, {'to': to});
+    } else
+      sendMsg(action, msg);
+
+    setState(() {
+      items.insert(0, MessageItem(meId, action, msg));
+    });
   }
 
   void showSnackBarWithKey(String message) {
-    scaffoldKey.currentState
-      ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(
+    print(message);
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
         content: Text(message),
         action: SnackBarAction(
           label: 'Done',
           onPressed: () {},
         ),
-      ));
+      ),
+    );
   }
 }
 
 class MessageItem {
-  String owner;
+  int owner;
+  String type;
   String content;
 
-  MessageItem(this.owner, this.content);
+  MessageItem(this.owner, this.type, this.content);
 }
