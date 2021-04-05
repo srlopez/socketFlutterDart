@@ -1,6 +1,8 @@
 import 'dart:io';
 import 'dart:convert' show utf8, jsonDecode, jsonEncode;
 
+import 'dart:math';
+
 InternetAddress HOST = InternetAddress.loopbackIPv4;
 const PORT = 7654;
 
@@ -68,7 +70,7 @@ void handleClient(Socket client) {
       var value = msg['value'] ?? "";
       if (value == "") return;
 
-      logInfo('$json <= ${connections.getId(client)}');
+      logInfo('$json ${connections.getAlias(client)}');
 
       switch (msg["action"]) {
         case 'ALIAS':
@@ -91,7 +93,7 @@ void handleClient(Socket client) {
             //Por cada destinatario
             to.split(';').forEach((id) {
               try {
-                var socket = connections.getSocket(int.parse(id));
+                var socket = connections.getSocket(id);
                 connections.sendMsg(client, socket, '', '', msg);
               } catch (e) {
                 //Bad state: No element
@@ -121,15 +123,17 @@ void handleClient(Socket client) {
 }
 
 class Client {
-  final int id;
+  final String id;
   String alias = '';
   String latlng = '';
 
   Client(socket)
-      : id = '${socket.remoteAddress.address}:${socket!.remotePort}'.hashCode;
+      : id = '${socket.remoteAddress.address}:${socket!.remotePort}'
+            .hashCode
+            .toString();
 
   @override
-  String toString() => jsonEncode({'id': id, 'alias': alias});
+  String toString() => jsonEncode({'id': int.parse(id), 'alias': alias});
 }
 
 class ConnectionsList {
@@ -146,12 +150,17 @@ class ConnectionsList {
     _items.remove(socket);
   }
 
-  Socket getSocket(int id) {
-    var entry = _items.entries.firstWhere((element) => element.value.id == id);
+  Socket getSocket(String id) {
+    print('===>$id ${id.runtimeType}');
+
+    // var idi = int.parse(id);
+    // String ids = id;
+    var entry = _items.entries.firstWhere(
+        (element) => (element.value.id == id || element.value.alias == id));
     return entry.key;
   }
 
-  int getId(Socket socket) {
+  String getId(Socket socket) {
     return _items[socket]!.id;
   }
 
@@ -160,7 +169,18 @@ class ConnectionsList {
   }
 
   void setAlias(Socket socket, String alias) {
-    _items[socket]!.alias = alias;
+    Random rnd = new Random();
+    var base = alias.trim(); //.replaceAll(RegExp(r'[^A-Za-z0-9().,;?]'), '');
+    var valid = base;
+    while (true) {
+      try {
+        _items.entries.firstWhere((element) => element.value.alias == valid);
+        valid = base + (1 + rnd.nextInt(98)).toString();
+      } catch (e) {
+        break;
+      }
+    }
+    _items[socket]!.alias = valid;
   }
 
   void setLocation(Socket socket, String location) {
@@ -180,7 +200,7 @@ class ConnectionsList {
     var msg = Map();
     msg['action'] = action;
     msg['value'] = value.toString();
-    msg['from'] = getId(from);
+    msg['from'] = int.parse(getId(from));
     msg['on'] = DateTime.now().toLocal().toString().substring(0, 19);
     msg.addAll(data);
 
