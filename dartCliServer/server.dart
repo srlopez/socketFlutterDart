@@ -62,9 +62,9 @@ void handleClient(Socket client) {
   }
 
   // onData: Por cada mensaje
-  void onData(String json) {
+  void onData(String data) {
     try {
-      Map msg = jsonDecode(json);
+      Map msg = jsonDecode(data);
 
       //Evitamos el mensaje void
       var value = msg['value'] ?? "";
@@ -104,6 +104,7 @@ void handleClient(Socket client) {
             connections.broadcastMsg(client, '', '', msg);
       }
     } catch (e) {
+      print(data);
       print(e);
     }
   }
