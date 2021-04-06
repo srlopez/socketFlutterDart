@@ -66,22 +66,23 @@ void handleClient(Socket client) {
     try {
       Map msg = jsonDecode(data);
 
+      String action = msg["action"].toString().toUpperCase();
+      String value = msg['value'] ?? '';
       //Evitamos el mensaje void
-      var value = msg['value'] ?? "";
-      if (value == "") return;
+      if (value == '') return;
 
-      logInfo('$json ${connections.getAlias(client)}');
+      logInfo('$data ${connections.getAlias(client)}');
 
-      switch (msg["action"]) {
+      var validChars = '!\$*+-^';
+      var marca = action.substring(0, 1);
+      marca = validChars.contains(marca) ? marca : '';
+
+      switch (action) {
         case 'ALIAS':
           connections.setAlias(client, value);
           connections.broadcastMsg(
               client, 'ALIAS', connections.getAlias(client));
           connections.sendMsg(client, client, 'USERS', connections.toString());
-          break;
-        case 'LATLNG':
-          connections.setLocation(client, value);
-          connections.broadcastLocation(client, msg);
           break;
         default:
           //Evitamos el mensaje de quien no se identifica
@@ -100,8 +101,14 @@ void handleClient(Socket client) {
                 //FormatException: Invalid radix-10 number
               }
             });
-          } else
-            connections.broadcastMsg(client, '', '', msg);
+          } else {
+            if (marca == '')
+              connections.broadcastMsg(client, '', '', msg);
+            else {
+              connections.setAction(client, action);
+              connections.broadcastAction(client, action, msg);
+            }
+          }
       }
     } catch (e) {
       print(data);
@@ -126,7 +133,7 @@ void handleClient(Socket client) {
 class Client {
   final String id;
   String alias = '';
-  String latlng = '';
+  var actions = Map<String, DateTime>();
 
   Client(socket)
       : id = '${socket.remoteAddress.address}:${socket!.remotePort}'
@@ -184,10 +191,6 @@ class ConnectionsList {
     _items[socket]!.alias = valid;
   }
 
-  void setLocation(Socket socket, String location) {
-    _items[socket]!.latlng = location;
-  }
-
   @override
   String toString() {
     var result = _items.entries
@@ -218,16 +221,28 @@ class ConnectionsList {
     msg.addAll(data);
     _items.forEach((to, client) {
       // No nos reenviamos el msg
-      if (from != to) sendMsg(from, to, action, value, msg);
+      if (from == to) return;
+      sendMsg(from, to, action, value, msg);
     });
   }
 
-  void broadcastLocation(Socket from, Map data) {
-    var msg = Map();
-    msg.addAll(data);
+  void setAction(Socket socket, String action) {
+    _items[socket]!.actions[action] = DateTime.now();
+  }
+
+  void broadcastAction(Socket from, String action, Map data) {
     _items.forEach((to, client) {
-      // No se envia locacizaciones a quien comparte la suya.
-      if ((from != to) && (client.latlng != '')) sendMsg(from, to, '', '', msg);
+      // No se envia el mensaje a quien comparte la suya.
+      // O no lo ha hecho en un plazo de 1 minuto
+      final segundos = 60;
+      try {
+        if (DateTime.now().difference(client.actions[action]!).inSeconds >
+            segundos) return;
+        if (from == to) return;
+        sendMsg(from, to, '', '', data);
+      } catch (e) {
+        return;
+      }
     });
   }
 }
