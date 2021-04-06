@@ -53,7 +53,7 @@ void handleClient(Socket client) {
     logInfo('Error $e');
   }
 
-  // onDone/Close conexxión
+  // onDone/Close conexión
   void onDone() {
     connections.broadcastMsg(client, room0, 'QUIT', connections.getId(client));
     connections.remove(client);
@@ -130,7 +130,8 @@ void handleClient(Socket client) {
       'Connected from ${client.remoteAddress.address}:${client.remotePort}');
   // Enviamos la ID
   connections.add(client);
-  connections.sendMsg(client, client, room0, 'ID', connections.getId(client));
+  connections.sendMsg(
+      client, client, room0, 'ID', connections.getId(client), {'room': room0});
 
   // Establecemos el Ciclo de lectura de mensajes con los lambdas aquí definidos.
   client
