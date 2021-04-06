@@ -46,3 +46,8 @@ El cliente debe enviar un mensaje `ALIAS` para indicar una identificación facil
 - Si se quiere enviar un salto de linea '\n' en el valor de un mensaje, se debe acordar una sustitución y su conversion a '\n' entre los clientes, o utilizar una encriptación a base64 por ejemplo.
 - El servidor no guarda ninguno de los valores enviados. Sólo hace la gestión de los usuarios con sus ALIAS, y la gestion de los mensajes de monitorización
 ```
+
+TODO:
+room
+ENTER
+EXIT

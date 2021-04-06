@@ -5,6 +5,7 @@ import 'dart:math';
 
 InternetAddress HOST = InternetAddress.loopbackIPv4;
 const PORT = 7654;
+const room0 = '_r0';
 
 var connections = ConnectionsList();
 
@@ -54,7 +55,7 @@ void handleClient(Socket client) {
 
   // onDone/Close conexxión
   void onDone() {
-    connections.broadcastMsg(client, 'QUIT', connections.getId(client));
+    connections.broadcastMsg(client, room0, 'QUIT', connections.getId(client));
     connections.remove(client);
     client.close();
     client.destroy();
@@ -66,6 +67,7 @@ void handleClient(Socket client) {
     try {
       Map msg = jsonDecode(data);
 
+      String room = msg['room'] ?? room0;
       String action = msg["action"].toString().toUpperCase();
       String value = msg['value'] ?? '';
       //Evitamos el mensaje void
@@ -81,8 +83,15 @@ void handleClient(Socket client) {
         case 'ALIAS':
           connections.setAlias(client, value);
           connections.broadcastMsg(
-              client, 'ALIAS', connections.getAlias(client));
-          connections.sendMsg(client, client, 'USERS', connections.toString());
+              client, room, 'ALIAS', connections.getAlias(client));
+          connections.sendMsg(
+              client, client, room, 'USERS', connections.toString());
+          break;
+        case 'ENTER':
+          connections.enterRoom(client, value);
+          break;
+        case 'EXIT':
+          connections.exitRoom(client, value);
           break;
         default:
           //Evitamos el mensaje de quien no se identifica
@@ -103,10 +112,10 @@ void handleClient(Socket client) {
             });
           } else {
             if (marca == '')
-              connections.broadcastMsg(client, '', '', msg);
+              connections.broadcastMsg(client, room, '', '', msg);
             else {
               connections.setAction(client, action);
-              connections.broadcastAction(client, action, msg);
+              connections.broadcastAction(client, room, action, msg);
             }
           }
       }
@@ -121,7 +130,7 @@ void handleClient(Socket client) {
       'Connected from ${client.remoteAddress.address}:${client.remotePort}');
   // Enviamos la ID
   connections.add(client);
-  connections.sendMsg(client, client, 'ID', connections.getId(client));
+  connections.sendMsg(client, client, room0, 'ID', connections.getId(client));
 
   // Establecemos el Ciclo de lectura de mensajes con los lambdas aquí definidos.
   client
@@ -134,6 +143,7 @@ class Client {
   final String id;
   String alias = '';
   var actions = Map<String, DateTime>();
+  var rooms = <String>[room0];
 
   Client(socket)
       : id = '${socket.remoteAddress.address}:${socket!.remotePort}'
@@ -199,11 +209,13 @@ class ConnectionsList {
     return '[ $result ]';
   }
 
-  void sendMsg(Socket from, Socket to, String action, dynamic value,
+  void sendMsg(
+      Socket from, Socket to, String room, String action, dynamic value,
       [Map data = const {}]) {
     var msg = Map();
+    if (room != room0) msg['room'] = room;
     msg['action'] = action;
-    msg['value'] = value.toString();
+    msg['value'] = value;
     msg['from'] = int.parse(getId(from));
     msg['on'] = DateTime.now().toLocal().toString().substring(0, 19);
     msg.addAll(data);
@@ -215,14 +227,13 @@ class ConnectionsList {
     }
   }
 
-  void broadcastMsg(Socket from, String action, dynamic value,
+  void broadcastMsg(Socket from, String room, String action, dynamic value,
       [Map data = const {}]) {
-    var msg = Map();
-    msg.addAll(data);
-    _items.forEach((to, client) {
+    _items.forEach((to, toClient) {
       // No nos reenviamos el msg
       if (from == to) return;
-      sendMsg(from, to, action, value, msg);
+      if (!toClient.rooms.contains(room)) return;
+      sendMsg(from, to, room, action, value, data);
     });
   }
 
@@ -230,19 +241,62 @@ class ConnectionsList {
     _items[socket]!.actions[action] = DateTime.now();
   }
 
-  void broadcastAction(Socket from, String action, Map data) {
-    _items.forEach((to, client) {
-      // No se envia el mensaje a quien comparte la suya.
-      // O no lo ha hecho en un plazo de 1 minuto
-      final segundos = 60;
+  void broadcastAction(Socket from, String room, String action, Map data) {
+    final timeoutsg = 60;
+    final now = DateTime.now();
+    _items.forEach((to, toClient) {
+      // No se envia el mensaje a quien no comparte el suya.
+      // O no lo ha hecho en un plazo de 1min/60sg
       try {
-        if (DateTime.now().difference(client.actions[action]!).inSeconds >
-            segundos) return;
+        if (now.difference(toClient.actions[action]!).inSeconds > timeoutsg) {
+          toClient.actions.remove(action);
+          return;
+        }
         if (from == to) return;
-        sendMsg(from, to, '', '', data);
-      } catch (e) {
-        return;
-      }
+        if (!toClient.rooms.contains(room)) return;
+        sendMsg(from, to, room, '', '', data);
+      } catch (e) {}
     });
   }
+
+  void enterRoom(Socket socket, String room) {
+    _items[socket]!.rooms.add(room);
+  }
+
+  void exitRoom(Socket socket, String room) {
+    _items[socket]!.rooms.remove(room);
+  }
 }
+
+/*
+
+
+  String regexString = r'((.*)\|)?([!\$*+\-^])?([^:]+):?([^@]+)@?(.*)';
+  RegExp regExp =
+      new RegExp(regexString, caseSensitive: false, multiLine: false);
+
+  var exp = <String>[
+    "Room 01|\$Action 01:Value 01@To 01;To 02;To 03",
+    "Room 02|Action 02:Value 01@To 01;To 02;To 03",
+    "!Action 03:Value 03",
+    "Action 04:Value 04@To 01",
+    "Action 05:Value 05@To 01;To 02;To 03",
+    "Action 06:Value 06",
+  ];
+
+  exp.forEach((e) {
+    var matches =
+        regExp.allMatches(e);
+
+    var match = matches.elementAt(0);
+
+    print('=== $e');
+    print("room\t${match.group(2)}");
+    print("mark\t${match.group(3)}");
+    print("action\t${match.group(4)}");
+    print("value\t${match.group(5)}");
+    print("to\t${match.group(6)}");
+    print('==========');
+  });
+  
+*/

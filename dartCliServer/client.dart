@@ -4,15 +4,18 @@ import 'dart:async';
 
 InternetAddress HOST = InternetAddress.loopbackIPv4;
 const PORT = 7654;
+
+const room0 = '_r0';
 void main(List<String> argv) {
   //Parámetros 'alias de cliente/dummy' 'Server IP/127.0.0.1'
   var alias = argv.length > 0 ? argv[0] : Platform.localHostname;
   if (argv.length > 1) HOST = InternetAddress(argv[1]);
 
   // envio de un mensaje convertido en Json
-  void sendMsg(Socket socket, String action, dynamic value,
+  void sendMsg(Socket socket, String room, String action, dynamic value,
       [Map data = const {}]) {
     var msg = Map();
+    if (room != room0) msg['room'] = room;
     msg["action"] = action;
     msg["value"] = value.toString();
     msg.addAll(data);
@@ -26,7 +29,7 @@ void main(List<String> argv) {
     print('Socket.Address.Port: ${socket.address.address}:${socket.port}');
 
     // Nos presentamos al servidor
-    sendMsg(socket, 'ALIAS', alias);
+    sendMsg(socket, room0, 'ALIAS', alias);
 
     // Establecemos los listeners onData, onDone, onError
     socket.cast<List<int>>().transform(utf8.decoder).listen(onData, onDone: () {
@@ -43,7 +46,7 @@ void main(List<String> argv) {
     print('fin getStdinData:');
 
     // El cliente sale e informamos que nos vamos
-    sendMsg(socket, 'QUIT', '');
+    sendMsg(socket, room0, 'QUIT', '');
 
     // Cerramos el socket y fin cliente
     socket.close();
@@ -83,6 +86,12 @@ getStdinData(Socket socket, Function sendMsg) async {
     if (msg.toString().toLowerCase() == 'quit')
       return (0); //<- si 'quit' acabamos
 
+    var room = room0;
+    if (msg.indexOf('|') > -1) {
+      room = msg.split('|')[0];
+      msg = msg.split('|')[1];
+    }
+
     var action = 'MSG';
     if (msg.indexOf(':') > -1) {
       action = msg.split(':')[0].toUpperCase();
@@ -92,9 +101,9 @@ getStdinData(Socket socket, Function sendMsg) async {
     if (msg.indexOf('@') > -1) {
       var value = msg.split('@')[0];
       var to = msg.split('@')[1]; //uno;dos;tres;cuatro
-      sendMsg(socket, action, value, {'to': to});
+      sendMsg(socket, room, action, value, {'to': to});
     } else
-      sendMsg(socket, action, msg);
+      sendMsg(socket, room, action, msg);
 
     //stdout.write("Mensaje: ");
   }
